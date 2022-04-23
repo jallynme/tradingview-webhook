@@ -83,6 +83,7 @@ func main() {
 				"message": "invalid amount_type",
 			})
 			SendLineNotify("ivalid amount_type", "1", "1")
+			return
 		}
 		message := fmt.Sprintf("Sending command %s %s price:%v amount: %v amount type: %v ", action, symbol, price, amount, amountType)
 		SendLineNotify(message, "1", "1")
