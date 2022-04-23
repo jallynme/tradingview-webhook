@@ -47,12 +47,13 @@ func main() {
 		price := params.Price
 		action := params.Action
 		amountType := params.AmountType
-		amount := params.Amount
+		amount := 0.0
 
 		if action != BuyActionType && action != SellActionType {
 			c.AbortWithStatusJSON(400, gin.H{
 				"message": "invalid webhook params",
 			})
+			return
 		}
 		walletBalance := Balances()
 		switch amountType {
@@ -78,7 +79,9 @@ func main() {
 					amount = Round(temp, 2)
 				}
 			}
-		default: //  LimitAmount
+		case LimitAmount:
+			amount = params.Amount
+		default:
 			c.AbortWithStatusJSON(400, gin.H{
 				"message": "invalid amount_type",
 			})
