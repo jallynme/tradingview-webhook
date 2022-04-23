@@ -58,6 +58,12 @@ func main() {
 		walletBalance := Balances()
 		switch amountType {
 		case AllAvailable:
+			if len(walletBalance) == 0 {
+				c.AbortWithStatusJSON(400, gin.H{
+					"message": "cannot get balances from Bitkub",
+				})
+				return
+			}
 			if action == BuyActionType {
 				if thb, ok := walletBalance["THB"]; ok {
 					amount = thb.Available
@@ -68,6 +74,12 @@ func main() {
 				}
 			}
 		case Percent:
+			if len(walletBalance) == 0 {
+				c.AbortWithStatusJSON(400, gin.H{
+					"message": "cannot get balances from Bitkub",
+				})
+				return
+			}
 			if action == BuyActionType {
 				if thb, ok := walletBalance["THB"]; ok {
 					temp := thb.Available * (amount / 100.0)
@@ -111,17 +123,22 @@ func Balances() WalletBalance {
 	params := map[string]interface{}{}
 	resp := call[WalletBalance]("market/balances", params)
 	if resp.Error != nil {
-		fmt.Printf("request failed with error code: %v\n description: %v\n", resp.Error.Code, resp.Error.Description)
+		desc := fmt.Sprintf("cannot get balances from Bitkub request failed with error: %v", resp.Error.Code) + resp.Error.Description
+		SendLineNotify(desc, "1", "1")
+		fmt.Printf("%v\n", desc)
 	}
 
 	if resp.Result != nil {
 		b, _ := json.Marshal(resp.Result)
 		fmt.Printf("resp: %v\n", string(b))
 		return *resp.Result
+	} else {
+		SendLineNotify("cannot get balances from Bitkub", "1", "1")
 	}
 	return WalletBalance{}
 }
 
+/*
 func Wallet() {
 	params := map[string]interface{}{}
 	resp := call[map[string]float64]("market/wallet", params)
@@ -134,6 +151,7 @@ func Wallet() {
 		fmt.Printf("resp: %v\n", string(b))
 	}
 }
+*/
 
 func Buy(symbol string, price float64, amount float64, c *gin.Context) {
 	if !strings.HasPrefix("symbol", "THB_") {
