@@ -10,6 +10,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -20,9 +21,11 @@ import (
 
 const (
 	version            = "0.0.1"
-	apiURL             = "https://api.bitkub.com/api/"
+	bitkubApi          = "https://api.bitkub.com/api/"
+	lineNotify         = "https://notify-api.line.me/api/notify"
 	headerBitkubAPIKey = "x-btk-apikey"
 	contentType        = "Content-Type"
+	authorization      = "Authorization"
 )
 
 func main() {
@@ -40,10 +43,12 @@ func main() {
 		params := webhookParams{}
 		c.ShouldBind(&params)
 		action := strings.ToLower(params.Action)
+		message := fmt.Sprintf("Sending command %s %s price:%v amount: %v ", action, params.Symbol, params.Price, params.Amount)
+		sendLineNotify(message, "1", "1")
 		if action == "buy" {
-			buy("BTC", params.Price, params.Amount, c)
+			buy(params.Symbol, params.Price, params.Amount, c)
 		} else if action == "sell" {
-			sell("BTC", params.Price, params.Amount, c)
+			sell(params.Symbol, params.Price, params.Amount, c)
 		} else {
 			c.AbortWithStatusJSON(400, gin.H{
 				"message": "invalid webhook params",
@@ -91,15 +96,18 @@ func buy(symbol string, price float64, amount float64, c *gin.Context) {
 	}
 	resp := call[order]("market/place-bid/test", params)
 	if resp.Error != nil {
-		desc := fmt.Sprintf("%v ", resp.Error.Code) + resp.Error.Description
-		fmt.Printf("request failed with error:  %v\n", desc)
+		desc := fmt.Sprintf("request failed with error: %v", resp.Error.Code) + resp.Error.Description
+		sendLineNotify(desc, "1", "1")
+		fmt.Printf("%v\n", desc)
 		c.JSON(200, gin.H{"error": desc})
 		return
 	}
 
 	if resp.Result != nil {
 		b, _ := json.Marshal(resp.Result)
-		fmt.Printf("resp: %v\n", string(b))
+		respMessage := string(b)
+		fmt.Printf("resp: %v\n", respMessage)
+		sendLineNotify(respMessage, "1", "1")
 		c.JSON(200, gin.H{"data": resp.Result})
 		return
 	}
@@ -118,19 +126,50 @@ func sell(symbol string, price float64, amount float64, c *gin.Context) {
 	}
 	resp := call[order]("market/place-ask/test", params)
 	if resp.Error != nil {
-		desc := fmt.Sprintf("%v ", resp.Error.Code) + resp.Error.Description
-		fmt.Printf("request failed with error:  %v\n", desc)
+		desc := fmt.Sprintf("request failed with error: %v", resp.Error.Code) + resp.Error.Description
+		sendLineNotify(desc, "1", "1")
 		c.JSON(200, gin.H{"error": desc})
 		return
 	}
 
 	if resp.Result != nil {
 		b, _ := json.Marshal(resp.Result)
-		fmt.Printf("resp: %v\n", string(b))
+		respMessage := string(b)
+		fmt.Printf("resp: %v\n", respMessage)
+		sendLineNotify(respMessage, "1", "1")
 		c.JSON(200, gin.H{"data": resp.Result})
 		return
 	}
 	c.AbortWithStatusJSON(422, gin.H{"data": gin.H{"error": "no response from Bitkub"}})
+}
+
+func sendLineNotify(message string, stickerId string, stickerPackageId string) {
+
+	data := url.Values{}
+	data.Set("message", message)
+	data.Set("stickerId", stickerId)
+	data.Set("stickerPackageId", stickerPackageId)
+
+	client := http.Client{}
+	fmt.Printf("%+v  \n", data)
+	req, _ := http.NewRequest("POST", lineNotify, strings.NewReader(data.Encode()))
+	req.Header.Set(contentType, "application/x-www-form-urlencoded")
+	token := "Bearer " + os.Getenv("LINE_NOTIFY_TOKEN")
+	req.Header.Set(authorization, token)
+	resp, err := client.Do(req)
+	if err != nil {
+		fmt.Printf("http request failed: %v \n", err)
+	}
+	respJSON := map[string]interface{}{}
+	respBody, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("ioutil.ReadAll error: %v\n", err)
+	}
+	if err := json.Unmarshal(respBody, &respJSON); err != nil {
+		fmt.Printf("failed to parse JSON response: %v\n", err)
+	}
+	s := fmt.Sprintf("%v \n", respJSON)
+	fmt.Println(s)
 }
 
 func call[T interface{}](path string, params map[string]interface{}) responseJSON[T] {
@@ -144,7 +183,7 @@ func call[T interface{}](path string, params map[string]interface{}) responseJSO
 
 	params["sig"] = hex.EncodeToString(sig.Sum(nil))
 	client := http.Client{}
-	url := apiURL + path
+	url := bitkubApi + path
 	reqBodyBytes, _ := json.Marshal(params)
 	reqBody := bytes.NewBuffer(reqBodyBytes)
 	fmt.Printf("%+v  \n", reqBody)
