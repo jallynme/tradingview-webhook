@@ -20,12 +20,12 @@ import (
 )
 
 const (
-	version            = "0.0.1"
-	bitkubApi          = "https://api.bitkub.com/api/"
-	lineNotify         = "https://notify-api.line.me/api/notify"
-	headerBitkubAPIKey = "x-btk-apikey"
-	contentType        = "Content-Type"
-	authorization      = "Authorization"
+	Version            = "0.0.1"
+	BitkubAPI          = "https://api.bitkub.com/api/"
+	LineNotify         = "https://notify-api.line.me/api/notify"
+	HeaderBitkubAPIKey = "x-btk-apikey"
+	ContentType        = "Content-Type"
+	Authorization      = "Authorization"
 )
 
 func main() {
@@ -40,16 +40,58 @@ func main() {
 		})
 	})
 	r.POST("/tradingview-webhook", func(c *gin.Context) {
-		params := webhookParams{}
+		params := WebhookParams{}
 		c.ShouldBind(&params)
-		action := strings.ToLower(params.Action)
-		message := fmt.Sprintf("Sending command %s %s price:%v amount: %v ", action, params.Symbol, params.Price, params.Amount)
-		sendLineNotify(message, "1", "1")
-		if action == "buy" {
-			buy(params.Symbol, params.Price, params.Amount, c)
-		} else if action == "sell" {
-			sell(params.Symbol, params.Price, params.Amount, c)
-		} else {
+		symbol := params.Symbol
+		price := params.Price
+		action := params.Action
+		amountType := params.AmountType
+		amount := params.Amount
+
+		if action != BuyActionType && action != SellActionType {
+			c.AbortWithStatusJSON(400, gin.H{
+				"message": "invalid webhook params",
+			})
+		}
+		walletBalance := Balances()
+		switch amountType {
+		case AllAvailable:
+			if action == BuyActionType {
+				if thb, ok := walletBalance["THB"]; ok {
+					amount = thb.Available
+				}
+			} else if action == SellActionType {
+				if symbol, ok := walletBalance[symbol]; ok {
+					amount = symbol.Available
+				}
+			}
+		case Percent:
+			if action == BuyActionType {
+				if thb, ok := walletBalance["THB"]; ok {
+					amount = thb.Available * (amount / 100.0)
+				}
+			} else if action == SellActionType {
+				if symbol, ok := walletBalance[symbol]; ok {
+					amount = symbol.Available * (amount / 100.0)
+				}
+			}
+		default: //  LimitAmount
+			c.AbortWithStatusJSON(400, gin.H{
+				"message": "invalid amount_type",
+			})
+			SendLineNotify("ivalid amount_type", "1", "1")
+		}
+		message := fmt.Sprintf("Sending command %s %s price:%v amount: %v amount type: %v ", action, symbol, price, amount, amountType)
+		SendLineNotify(message, "1", "1")
+
+		switch action {
+		case BuyActionType:
+			price := params.Price
+			Buy(symbol, price, amount, c)
+		case SellActionType:
+			price := params.Price
+			Sell(symbol, price, amount, c)
+		default:
 			c.AbortWithStatusJSON(400, gin.H{
 				"message": "invalid webhook params",
 			})
@@ -58,9 +100,24 @@ func main() {
 	r.Run()
 }
 
-func balances() {
+func Balances() WalletBalance {
 	params := map[string]interface{}{}
-	resp := call[map[string]balance]("market/wallet", params)
+	resp := call[WalletBalance]("market/balances", params)
+	if resp.Error != nil {
+		fmt.Printf("request failed with error code: %v\n description: %v\n", resp.Error.Code, resp.Error.Description)
+	}
+
+	if resp.Result != nil {
+		b, _ := json.Marshal(resp.Result)
+		fmt.Printf("resp: %v\n", string(b))
+		return *resp.Result
+	}
+	return WalletBalance{}
+}
+
+func Wallet() {
+	params := map[string]interface{}{}
+	resp := call[map[string]float64]("market/wallet", params)
 	if resp.Error != nil {
 		fmt.Printf("request failed with error code: %v\n description: %v\n", resp.Error.Code, resp.Error.Description)
 	}
@@ -71,20 +128,7 @@ func balances() {
 	}
 }
 
-func wallet() {
-	params := map[string]interface{}{}
-	resp := call[map[string]interface{}]("market/wallet", params)
-	if resp.Error != nil {
-		fmt.Printf("request failed with error code: %v\n description: %v\n", resp.Error.Code, resp.Error.Description)
-	}
-
-	if resp.Result != nil {
-		b, _ := json.Marshal(resp.Result)
-		fmt.Printf("resp: %v\n", string(b))
-	}
-}
-
-func buy(symbol string, price float64, amount float64, c *gin.Context) {
+func Buy(symbol string, price float64, amount float64, c *gin.Context) {
 	if !strings.HasPrefix("symbol", "THB_") {
 		symbol = "THB_" + symbol
 	}
@@ -94,10 +138,10 @@ func buy(symbol string, price float64, amount float64, c *gin.Context) {
 		"rat": price,
 		"typ": "limit",
 	}
-	resp := call[order]("market/place-bid/test", params)
+	resp := call[Order]("market/place-bid/test", params)
 	if resp.Error != nil {
 		desc := fmt.Sprintf("request failed with error: %v", resp.Error.Code) + resp.Error.Description
-		sendLineNotify(desc, "1", "1")
+		SendLineNotify(desc, "1", "1")
 		fmt.Printf("%v\n", desc)
 		c.JSON(200, gin.H{"error": desc})
 		return
@@ -107,14 +151,14 @@ func buy(symbol string, price float64, amount float64, c *gin.Context) {
 		b, _ := json.Marshal(resp.Result)
 		respMessage := string(b)
 		fmt.Printf("resp: %v\n", respMessage)
-		sendLineNotify(respMessage, "1", "1")
+		SendLineNotify(respMessage, "1", "1")
 		c.JSON(200, gin.H{"data": resp.Result})
 		return
 	}
 	c.AbortWithStatusJSON(422, gin.H{"data": gin.H{"error": "no response from Bitkub"}})
 }
 
-func sell(symbol string, price float64, amount float64, c *gin.Context) {
+func Sell(symbol string, price float64, amount float64, c *gin.Context) {
 	if !strings.HasPrefix("symbol", "THB_") {
 		symbol = "THB_" + symbol
 	}
@@ -124,10 +168,10 @@ func sell(symbol string, price float64, amount float64, c *gin.Context) {
 		"rat": price,
 		"typ": "limit",
 	}
-	resp := call[order]("market/place-ask/test", params)
+	resp := call[Order]("market/place-ask/test", params)
 	if resp.Error != nil {
-		desc := fmt.Sprintf("request failed with error: %v", resp.Error.Code) + resp.Error.Description
-		sendLineNotify(desc, "1", "1")
+		desc := fmt.Sprintf("request failed with error: %v ", resp.Error.Code) + resp.Error.Description
+		SendLineNotify(desc, "1", "1")
 		c.JSON(200, gin.H{"error": desc})
 		return
 	}
@@ -136,14 +180,14 @@ func sell(symbol string, price float64, amount float64, c *gin.Context) {
 		b, _ := json.Marshal(resp.Result)
 		respMessage := string(b)
 		fmt.Printf("resp: %v\n", respMessage)
-		sendLineNotify(respMessage, "1", "1")
+		SendLineNotify(respMessage, "1", "1")
 		c.JSON(200, gin.H{"data": resp.Result})
 		return
 	}
 	c.AbortWithStatusJSON(422, gin.H{"data": gin.H{"error": "no response from Bitkub"}})
 }
 
-func sendLineNotify(message string, stickerId string, stickerPackageId string) {
+func SendLineNotify(message string, stickerId string, stickerPackageId string) {
 
 	data := url.Values{}
 	data.Set("message", message)
@@ -152,10 +196,10 @@ func sendLineNotify(message string, stickerId string, stickerPackageId string) {
 
 	client := http.Client{}
 	fmt.Printf("%+v  \n", data)
-	req, _ := http.NewRequest("POST", lineNotify, strings.NewReader(data.Encode()))
-	req.Header.Set(contentType, "application/x-www-form-urlencoded")
+	req, _ := http.NewRequest("POST", LineNotify, strings.NewReader(data.Encode()))
+	req.Header.Set(ContentType, "application/x-www-form-urlencoded")
 	token := "Bearer " + os.Getenv("LINE_NOTIFY_TOKEN")
-	req.Header.Set(authorization, token)
+	req.Header.Set(Authorization, token)
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Printf("http request failed: %v \n", err)
@@ -172,7 +216,7 @@ func sendLineNotify(message string, stickerId string, stickerPackageId string) {
 	fmt.Println(s)
 }
 
-func call[T interface{}](path string, params map[string]interface{}) responseJSON[T] {
+func call[T interface{}](path string, params map[string]interface{}) ResponseJSON[T] {
 	apiKey := os.Getenv("BITKUB_API_KEY")
 	secret := os.Getenv("BITKUB_API_SECRET")
 	ts := time.Now().Unix()
@@ -183,13 +227,13 @@ func call[T interface{}](path string, params map[string]interface{}) responseJSO
 
 	params["sig"] = hex.EncodeToString(sig.Sum(nil))
 	client := http.Client{}
-	url := bitkubApi + path
+	url := BitkubAPI + path
 	reqBodyBytes, _ := json.Marshal(params)
 	reqBody := bytes.NewBuffer(reqBodyBytes)
 	fmt.Printf("%+v  \n", reqBody)
 	req, _ := http.NewRequest("POST", url, reqBody)
-	req.Header.Set(contentType, "application/json")
-	req.Header.Set(headerBitkubAPIKey, apiKey)
+	req.Header.Set(ContentType, "application/json")
+	req.Header.Set(HeaderBitkubAPIKey, apiKey)
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Printf("http request failed: %v \n", err)
@@ -208,30 +252,45 @@ func call[T interface{}](path string, params map[string]interface{}) responseJSO
 		b, _ := json.Marshal(v)
 		json.Unmarshal(b, &parseResult)
 	}
-	bke := bitkubError{}.ErrorFromCode(int(respJSON["error"].(float64)))
+	bke := BitkubError{}.ErrorFromCode(int(respJSON["error"].(float64)))
 	if v, ok := respJSON["message"].(string); ok {
 		bke.Description = v
 	}
-	r := responseJSON[T]{
+	r := ResponseJSON[T]{
 		Error:  bke,
 		Result: parseResult,
 	}
 	return r
 }
 
-type webhookParams struct {
-	Symbol string  `json:"symbol"`
-	Action string  `json:"action"`
-	Amount float64 `json:"amount"`
-	Price  float64 `json:"price"`
+type WalletBalance map[string]Balance
+type AmountType string
+type ActionType string
+
+const (
+	LimitAmount  AmountType = "limit"
+	AllAvailable AmountType = "all_available"
+	Percent      AmountType = "percent"
+)
+const (
+	BuyActionType  ActionType = "buy"
+	SellActionType ActionType = "sell"
+)
+
+type WebhookParams struct {
+	Symbol     string     `json:"symbol"`
+	Amount     float64    `json:"amount"`
+	Price      float64    `json:"price"`
+	Action     ActionType `json:"action"`
+	AmountType AmountType `json:"amount_type"`
 }
 
-type balance struct {
+type Balance struct {
 	Available float64 `json:"available"`
 	Reserved  float64 `json:"reserved"`
 }
 
-type order struct {
+type Order struct {
 	ID              int64   `json:"id"`
 	Hash            string  `json:"hash"`
 	Type            string  `json:"typ"`
@@ -243,17 +302,17 @@ type order struct {
 	Timestamp       int64   `json:"ts"`
 }
 
-type responseJSON[T any] struct {
-	Error  *bitkubError
+type ResponseJSON[T any] struct {
+	Error  *BitkubError
 	Result *T `json:"result"`
 }
 
-type bitkubError struct {
+type BitkubError struct {
 	Code        int
 	Description string
 }
 
-func (bitkubError) ErrorFromCode(code int) *bitkubError {
+func (BitkubError) ErrorFromCode(code int) *BitkubError {
 	description := ""
 	switch code {
 	case 1:
@@ -347,7 +406,7 @@ func (bitkubError) ErrorFromCode(code int) *bitkubError {
 	default:
 		return nil
 	}
-	e := bitkubError{Code: code, Description: description}
+	e := BitkubError{Code: code, Description: description}
 	return &e
 }
 
