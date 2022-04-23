@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -68,11 +69,13 @@ func main() {
 		case Percent:
 			if action == BuyActionType {
 				if thb, ok := walletBalance["THB"]; ok {
-					amount = thb.Available * (amount / 100.0)
+					temp := thb.Available * (amount / 100.0)
+					amount = Round(temp, 2)
 				}
 			} else if action == SellActionType {
 				if symbol, ok := walletBalance[symbol]; ok {
-					amount = symbol.Available * (amount / 100.0)
+					temp := symbol.Available * (amount / 100.0)
+					amount = Round(temp, 2)
 				}
 			}
 		default: //  LimitAmount
@@ -410,5 +413,15 @@ func (BitkubError) ErrorFromCode(code int) *BitkubError {
 	return &e
 }
 
-// https://1888-171-98-18-251.ngrok.io/tradingview-webhook
-// {"symbol": "IOST", "action":"BUY", "price": 1, "amout":100 }
+func Round(val float64, precision int) float64 {
+	return math.Round(val*(math.Pow10(precision))) / math.Pow10(precision)
+}
+
+// http://localhost:8080/tradingview-webhook
+// {
+//     "symbol": "IOST",
+//     "action": "buy",
+//     "price": 1,
+//     "amount": 10,
+//     "amount_type": "percent" // limit,all_available,percent
+// }
