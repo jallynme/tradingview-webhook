@@ -29,6 +29,8 @@ const (
 	Authorization      = "Authorization"
 )
 
+var walletBalance = WalletBalance{}
+
 func main() {
 	err := godotenv.Load()
 	if err != nil {
@@ -55,7 +57,7 @@ func main() {
 			})
 			return
 		}
-		walletBalance := Balances()
+		walletBalance = Balances()
 		switch amountType {
 		case AllAvailable:
 			if len(walletBalance) == 0 {
@@ -65,13 +67,9 @@ func main() {
 				return
 			}
 			if action == BuyActionType {
-				if thb, ok := walletBalance["THB"]; ok {
-					amount = thb.Available
-				}
+				amount = AllAvailableAmount("THB")
 			} else if action == SellActionType {
-				if symbol, ok := walletBalance[symbol]; ok {
-					amount = symbol.Available
-				}
+				amount = AllAvailableAmount(symbol)
 			}
 		case Percent:
 			if len(walletBalance) == 0 {
@@ -80,16 +78,11 @@ func main() {
 				})
 				return
 			}
+			amount = params.Amount
 			if action == BuyActionType {
-				if thb, ok := walletBalance["THB"]; ok {
-					temp := thb.Available * (amount / 100.0)
-					amount = Round(temp, 2)
-				}
+				amount = AmountPercent("THB", amount)
 			} else if action == SellActionType {
-				if symbol, ok := walletBalance[symbol]; ok {
-					temp := symbol.Available * (amount / 100.0)
-					amount = Round(temp, 2)
-				}
+				amount = AmountPercent(symbol, amount)
 			}
 		case LimitAmount:
 			amount = params.Amount
@@ -123,7 +116,7 @@ func Balances() WalletBalance {
 	params := map[string]interface{}{}
 	resp := call[WalletBalance]("market/balances", params)
 	if resp.Error != nil {
-		desc := fmt.Sprintf("cannot get balances from Bitkub request failed with error: %v", resp.Error.Code) + resp.Error.Description
+		desc := fmt.Sprintf("cannot get balances from Bitkub request failed with error: %v ", resp.Error.Code) + resp.Error.Description
 		SendLineNotify(desc, "1", "1")
 		fmt.Printf("%v\n", desc)
 	}
@@ -163,9 +156,9 @@ func Buy(symbol string, price float64, amount float64, c *gin.Context) {
 		"rat": price,
 		"typ": "limit",
 	}
-	resp := call[Order]("market/place-bid/test", params)
+	resp := call[Order]("market/place-bid", params)
 	if resp.Error != nil {
-		desc := fmt.Sprintf("request failed with error: %v", resp.Error.Code) + resp.Error.Description
+		desc := fmt.Sprintf("request failed with error: %v ", resp.Error.Code) + resp.Error.Description
 		SendLineNotify(desc, "1", "1")
 		fmt.Printf("%v\n", desc)
 		c.JSON(200, gin.H{"error": desc})
@@ -193,7 +186,7 @@ func Sell(symbol string, price float64, amount float64, c *gin.Context) {
 		"rat": price,
 		"typ": "limit",
 	}
-	resp := call[Order]("market/place-ask/test", params)
+	resp := call[Order]("market/place-ask", params)
 	if resp.Error != nil {
 		desc := fmt.Sprintf("request failed with error: %v ", resp.Error.Code) + resp.Error.Description
 		SendLineNotify(desc, "1", "1")
@@ -437,6 +430,22 @@ func (BitkubError) ErrorFromCode(code int) *BitkubError {
 
 func Round(val float64, precision int) float64 {
 	return math.Round(val*(math.Pow10(precision))) / math.Pow10(precision)
+}
+
+func AllAvailableAmount(symbol string) float64 {
+	amount := 0.0
+	if s, ok := walletBalance[symbol]; ok {
+		amount = s.Available
+	}
+	return amount
+}
+
+func AmountPercent(symbol string, amount float64) float64 {
+	if s, ok := walletBalance[symbol]; ok {
+		temp := s.Available * (amount / 100.0)
+		amount = Round(temp, 2)
+	}
+	return amount
 }
 
 // http://localhost:8080/tradingview-webhook
